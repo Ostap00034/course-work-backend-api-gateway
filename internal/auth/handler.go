@@ -2,6 +2,7 @@
 package auth
 
 import (
+	"fmt"
 	"net/http"
 
 	util "github.com/Ostap00034/course-work-backend-api-gateway/util/cookie"
@@ -84,12 +85,42 @@ func RegisterHandlers(r gin.IRouter, client authv1.AuthServiceClient) {
 		}
 
 		// 3) Успех
-		util.SetCookie(c, "auth_token", resp.Token, resp.ExpiresAt)
+		util.SetCookie(c, "token", resp.Token, resp.ExpiresAt)
 		c.JSON(http.StatusOK, Response{
 			Success: true,
 			Message: "авторизация прошла успешно",
 		})
 	})
 
-	// остальные хендлеры (validate, logout) можно аналогично обернуть в Response
+	r.GET("/validate", func(c *gin.Context) {
+		token, ok := util.GetCookie(c, "token")
+		if !ok {
+			c.JSON(http.StatusUnauthorized, errorResponse("токен обязателен", nil))
+			return
+		}
+		resp, err := client.ValidateToken(c, &authv1.ValidateTokenRequest{Token: token})
+		fmt.Println(resp)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, errorResponse("токен невалидный или истек", nil))
+			return
+		}
+		c.JSON(http.StatusOK, ValidateTokenResponse{
+			Success:   true,
+			Message:   "токен валидный",
+			ExpiresAt: resp.ExpiresAt,
+			UserId:    resp.UserId,
+			Errors:    nil,
+		})
+	})
+
+	r.POST("/logout", func(c *gin.Context) {
+		token, _ := util.GetCookie(c, "token")
+		_, err := client.Revoke(c, &authv1.RevokeRequest{Token: token})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, errorResponse("выход не удался", nil))
+			return
+		}
+		util.ClearCookie(c, "token")
+		c.JSON(http.StatusOK, successResponse("выход успешен"))
+	})
 }
