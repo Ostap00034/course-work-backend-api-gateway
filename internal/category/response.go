@@ -1,6 +1,6 @@
-package user
+package category
 
-import commonpb "github.com/Ostap00034/course-work-backend-api-specs/gen/go/common/v1"
+import commonpbv1 "github.com/Ostap00034/course-work-backend-api-specs/gen/go/common/v1"
 
 type Response struct {
 	Success bool              `json:"success"`
@@ -8,14 +8,14 @@ type Response struct {
 	Errors  map[string]string `json:"errors,omitempty"`
 }
 
-type ProfileResponse struct {
+type CategoryResponse struct {
 	Response
-	User *commonpb.UserData `json:"user,omitempty"`
+	Category *commonpbv1.CategoryData `json:"category,omitempty"`
 }
 
-type GetUsersResponse struct {
+type CategoriesResponse struct {
 	Response
-	Users []*commonpb.UserData `json:"users,omitempty"`
+	Categories []*commonpbv1.CategoryData `json:"categories"`
 }
 
 func errorResponse(msg string, errs map[string]string) Response {

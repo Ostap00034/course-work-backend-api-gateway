@@ -1,3 +1,8 @@
+// @title        Course Work API
+// @version      1.0
+// @description  API Gateway для микросервисов
+// @host         localhost:8080
+// @BasePath     /api
 package main
 
 import (
@@ -9,7 +14,14 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	_ "github.com/Ostap00034/course-work-backend-api-gateway/cmd/api/docs"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
+
 	"github.com/Ostap00034/course-work-backend-api-gateway/internal/auth"
+	"github.com/Ostap00034/course-work-backend-api-gateway/internal/category"
+	"github.com/Ostap00034/course-work-backend-api-gateway/internal/offer"
+	"github.com/Ostap00034/course-work-backend-api-gateway/internal/order"
 	"github.com/Ostap00034/course-work-backend-api-gateway/internal/user"
 )
 
@@ -45,15 +57,53 @@ func main() {
 		log.Fatalf("failed to dial user-service: %v", err)
 	}
 
+	categorySvcAddr, exists := os.LookupEnv("CATEGORY_SERVICE_ADDR")
+	if !exists {
+		log.Fatal("not CATEGORY_SERVICE_ADDR in .env file")
+	}
+	categoryConn, err := grpc.NewClient(categorySvcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Fatalf("failed to dial category-service: %v", err)
+	}
+
+	orderSvcAddr, exists := os.LookupEnv("ORDER_SERVICE_ADDR")
+	if !exists {
+		log.Fatal("not ORDER_SERVICE_ADDR in .env file")
+	}
+	orderConn, err := grpc.NewClient(orderSvcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Fatalf("failed to dial order-service: %v", err)
+	}
+
+	offerSvcAddr, exists := os.LookupEnv("OFFER_SERVICE_ADDR")
+	if !exists {
+		log.Fatal("not OFFER_SERVICE_ADDR in .env file")
+	}
+	offerConn, err := grpc.NewClient(offerSvcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Fatalf("failed to dial offer-service: %v", err)
+	}
+
 	// 3) Клиенты
 	authClient := auth.NewClient(authConn)
 	userClient := user.NewClient(userConn)
+	categoryClient := category.NewClient(categoryConn)
+	orderClient := order.NewClient(orderConn)
+	offerClient := offer.NewClient(offerConn)
 
 	// 4) Роуты по фичам
 	auth.RegisterHandlers(api.Group("/auth"), authClient)
 	user.RegisterHandlers(api.Group("/users"), userClient)
+	category.RegisterHandlers(api.Group("/categories"), categoryClient)
+	order.RegisterHandlers(api.Group("/orders"), orderClient)
 
-	// 5) Запуск
+	// 5) Swagger UI
+	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+
+	// WebSocket для offer
+	api.GET("/ws/offers", offer.OfferWsHandler(offerClient, authClient))
+
+	// 6) Запуск
 	addr, exists := os.LookupEnv("GATEWAY_ADDR")
 	if !exists {
 		log.Fatal("not GATEWAY_ADDR in .env file")

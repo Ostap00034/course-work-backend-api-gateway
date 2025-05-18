@@ -1,0 +1,108 @@
+basePath: /api
+definitions:
+  auth.Response:
+    properties:
+      errors:
+        additionalProperties:
+          type: string
+        type: object
+      expiresAt:
+        type: integer
+      message:
+        type: string
+      success:
+        type: boolean
+      userId:
+        type: string
+    type: object
+  auth.loginRequest:
+    properties:
+      email:
+        type: string
+      password:
+        minLength: 6
+        type: string
+    required:
+    - email
+    - password
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: API Gateway для микросервисов
+  title: Course Work API
+  version: "1.0"
+paths:
+  /auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Логин по email и паролю, выставляет httpOnly cookie
+      parameters:
+      - description: Параметры авторизации
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/auth.loginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: успех
+          schema:
+            $ref: '#/definitions/auth.Response'
+        "400":
+          description: ошибка валидации
+          schema:
+            $ref: '#/definitions/auth.Response'
+        "401":
+          description: неверные логин/пароль
+          schema:
+            $ref: '#/definitions/auth.Response'
+        "500":
+          description: внутренняя ошибка
+          schema:
+            $ref: '#/definitions/auth.Response'
+      summary: Авторизация
+      tags:
+      - auth
+  /auth/logout:
+    post:
+      consumes:
+      - application/json
+      description: Отозвать токен и очистить cookie
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: выход успешен
+          schema:
+            $ref: '#/definitions/auth.Response'
+        "500":
+          description: выход не удался
+          schema:
+            $ref: '#/definitions/auth.Response'
+      summary: Выход
+      tags:
+      - auth
+  /auth/validate:
+    get:
+      consumes:
+      - application/json
+      description: Проверяет валидность текущего httpOnly cookie
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: токен валидный
+          schema:
+            $ref: '#/definitions/auth.Response'
+        "401":
+          description: токен невалидный или истек
+          schema:
+            $ref: '#/definitions/auth.Response'
+      summary: Проверка токена
+      tags:
+      - auth
+swagger: "2.0"
