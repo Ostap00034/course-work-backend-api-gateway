@@ -101,7 +101,8 @@ func main() {
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// WebSocket для offer
-	api.GET("/ws/offers", offer.OfferWsHandler(offerClient, authClient))
+	hub := offer.NewHub()
+	api.GET("/ws/offers", offer.OfferWsHandler(hub, offerClient, authClient))
 
 	// 6) Запуск
 	addr, exists := os.LookupEnv("GATEWAY_ADDR")

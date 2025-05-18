@@ -14,6 +14,25 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// wsMsg описывает общую обёртку для входящих сообщений
+type wsMsg struct {
+	Action string          `json:"action"`
+	Data   json.RawMessage `json:"data"`
+}
+
+// createOfferPayload — пэйлоад для создания оффера
+type createOfferPayload struct {
+	OrderId  string  `json:"order_id"`
+	MasterId string  `json:"master_id"`
+	Price    float32 `json:"price"`
+}
+
+// updateOfferPayload — пэйлоад для обновления оффера
+type updateOfferPayload struct {
+	OfferId string `json:"offer_id"`
+	Status  string `json:"status"`
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
@@ -26,24 +45,15 @@ const (
 	pingPeriod = (pongWait * 9) / 10
 )
 
-type wsMsg struct {
-	Action string          `json:"action"`
-	Data   json.RawMessage `json:"data"`
-}
-
-type createOfferPayload struct {
-	OrderId  string  `json:"order_id"`
-	MasterId string  `json:"master_id"`
-	Price    float32 `json:"price"`
-}
-
-// Новый пэйлоад для обновления предложения
-type updateOfferPayload struct {
-	OfferId string `json:"offer_id"`
-	Status  string `json:"status"`
-}
-
-func OfferWsHandler(offerClient offerpbv1.OfferServiceClient, authClient authpbv1.AuthServiceClient) gin.HandlerFunc {
+// OfferWsHandler возвращает Gin-хендлер WebSocket.
+//   - hub        — менеджер подписок, у которого реализованы методы Subscribe, Unsubscribe и Broadcast.
+//   - offerClient — gRPC-клиент OfferService.
+//   - authClient  — gRPC-клиент AuthService для проверки токена.
+func OfferWsHandler(
+	hub *Hub,
+	offerClient offerpbv1.OfferServiceClient,
+	authClient authpbv1.AuthServiceClient,
+) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
@@ -52,8 +62,8 @@ func OfferWsHandler(offerClient offerpbv1.OfferServiceClient, authClient authpbv
 		}
 		defer conn.Close()
 
-		// 1) Auth по cookie
-		token, err := c.Cookie("token") // убедись, что тут то же имя, что и в SetCookie
+		// 1) Авторизация по cookie "token"
+		token, err := c.Cookie("token")
 		if err != nil {
 			conn.WriteMessage(websocket.CloseMessage,
 				websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "no auth"))
@@ -65,7 +75,7 @@ func OfferWsHandler(offerClient offerpbv1.OfferServiceClient, authClient authpbv
 			return
 		}
 
-		// 2) Ping/Pong keep-alive
+		// 2) Настройка ping/pong для keep-alive
 		conn.SetReadDeadline(time.Now().Add(pongWait))
 		conn.SetPongHandler(func(string) error {
 			conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -82,7 +92,7 @@ func OfferWsHandler(offerClient offerpbv1.OfferServiceClient, authClient authpbv
 			}
 		}()
 
-		// 3) Основной loop
+		// 3) Основной цикл обработки сообщений
 		for {
 			_, raw, err := conn.ReadMessage()
 			if err != nil {
@@ -95,65 +105,74 @@ func OfferWsHandler(offerClient offerpbv1.OfferServiceClient, authClient authpbv
 			}
 
 			switch m.Action {
+			// подписаться на обновления конкретного заказа
+			case "subscribe":
+				var sub struct {
+					OrderId string `json:"order_id"`
+				}
+				if err := json.Unmarshal(m.Data, &sub); err == nil {
+					hub.Subscribe(sub.OrderId, conn)
+				}
 
+			// создать новый оффер
 			case "createOffer":
 				var p createOfferPayload
-				if json.Unmarshal(m.Data, &p) != nil {
+				if err := json.Unmarshal(m.Data, &p); err != nil {
 					conn.WriteJSON(gin.H{"action": "createOffer", "error": "bad data"})
 					continue
 				}
-				resp, err := offerClient.CreateOffer(context.Background(), &offerpbv1.CreateOfferRequest{
-					OrderId:  p.OrderId,
-					MasterId: p.MasterId,
-					Price:    p.Price,
-				})
+				grpcResp, err := offerClient.CreateOffer(
+					context.Background(),
+					&offerpbv1.CreateOfferRequest{
+						OrderId:  p.OrderId,
+						MasterId: p.MasterId,
+						Price:    p.Price,
+					},
+				)
 				if err != nil {
 					st := status.Convert(err)
 					conn.WriteJSON(gin.H{"action": "createOffer", "error": st.Message()})
-				} else {
-					conn.WriteJSON(gin.H{"action": "createOffer", "offer": resp.Offer})
-				}
-
-			case "listOffers":
-				var tmp struct {
-					OrderId string `json:"order_id"`
-				}
-				if json.Unmarshal(m.Data, &tmp) != nil {
-					conn.WriteJSON(gin.H{"action": "listOffers", "error": "bad data"})
 					continue
 				}
-				resp, err := offerClient.GetMyOrderOffers(context.Background(), &offerpbv1.GetMyOrderOffersRequest{
-					OrderId: tmp.OrderId,
-				})
-				if err != nil {
-					st := status.Convert(err)
-					conn.WriteJSON(gin.H{"action": "listOffers", "error": st.Message()})
-				} else {
-					conn.WriteJSON(gin.H{"action": "listOffers", "offers": resp.Offers})
-				}
+				// ответ инициатору
+				conn.WriteJSON(gin.H{"action": "createOffer", "offer": grpcResp.Offer})
+				// уведомить всех подписчиков заказа
+				hub.Broadcast(p.OrderId, gin.H{"action": "offerCreated", "offer": grpcResp.Offer})
 
+			// обновить статус существующего оффера
 			case "updateOffer":
 				var p updateOfferPayload
-				if json.Unmarshal(m.Data, &p) != nil {
+				if err := json.Unmarshal(m.Data, &p); err != nil {
 					conn.WriteJSON(gin.H{"action": "updateOffer", "error": "bad data"})
 					continue
 				}
-
-				resp, err := offerClient.UpdateOffer(context.Background(), &offerpbv1.UpdateOfferRequest{
-					Id:     p.OfferId,
-					Status: p.Status,
-				})
-
+				grpcResp, err := offerClient.UpdateOffer(
+					context.Background(),
+					&offerpbv1.UpdateOfferRequest{
+						Id:     p.OfferId,
+						Status: p.Status,
+					},
+				)
 				if err != nil {
 					st := status.Convert(err)
 					conn.WriteJSON(gin.H{"action": "updateOffer", "error": st.Message()})
-				} else {
-					conn.WriteJSON(gin.H{"action": "updateOffer", "offer": resp.Offer})
+					continue
 				}
+				// ответ инициатору
+				conn.WriteJSON(gin.H{"action": "updateOffer", "offer": grpcResp.Offer})
+				// и рассылка всем подписчикам по заказу
+				hub.Broadcast(p.OfferId, gin.H{"action": "offerUpdated", "offer": grpcResp.Offer})
 
 			default:
 				conn.WriteJSON(gin.H{"error": "unknown action"})
 			}
 		}
+
+		// при отключении клиента отписать от всех заказов
+		hub.mu.Lock()
+		for orderID := range hub.subs {
+			hub.Unsubscribe(orderID, conn)
+		}
+		hub.mu.Unlock()
 	}
 }
